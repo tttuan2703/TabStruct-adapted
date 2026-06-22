@@ -1,0 +1,30 @@
+RESEARCH COMPARISON SUMMARY
+===========================
+
+Source root: models/research_runs_gate_progressive
+Higher is better for denotation accuracy and throughput.
+Lower is better for loss and runtime.
+Do not claim improvement from smoke/quick runs alone.
+
+Dataset: wikisql
+
+  Metric: train_train_runtime
+    m3_gate: mean=4855.35, std=0, n=1
+
+  Metric: train_train_samples_per_second
+    m3_gate: mean=4.943, std=0, n=1
+
+  Metric: predict_predict_runtime
+    m3_gate: mean=1272.76, std=0, n=1
+
+  Metric: predict_predict_samples_per_second
+    m3_gate: mean=12.475, std=0, n=1
+
+
+Interpretation checklist:
+- smoke/quick: pipeline check only, not scientific evidence.
+- course/core: first useful original-baseline vs M3-gate comparison.
+- ablation/full: stronger evidence if trends are consistent across seeds/datasets.
+- speedup claims require runtime/GPU-memory evidence.
+- gate_loss/gate_sparsity/gate_entropy/gate_diversity are logged for new M3-gate runs.
+- active-edge and GPU-memory claims still require extra instrumentation or external logs.
