@@ -34,7 +34,7 @@ Stages, from small to large:
   validate   Check venv, Python, Torch, source compile, and dataset presence.
   smoke      Smallest train run: WikiSQL, seed 42, M3 vs M3-gate, 10 steps.
   quick      Short comparison: WikiSQL, seed 42, M3 vs M3-gate, 100 steps.
-  course     Recommended class-project run: WikiSQL, seed 42, M0/M1/M3/M3-gate.
+  course     Recommended class-project run: WikiSQL, seed 42, M3-gate only by default.
   core       Medium comparison: WikiSQL + Synthetic, seed 42, M0/M1/M3/M3-gate.
   ablation   Medium-large: core + gate ablations, seed 42.
   full       Large run: WikiSQL + Synthetic, seeds 42/43/44, full steps + ablations.
@@ -53,14 +53,29 @@ Important environment overrides:
   NUM_BEAMS=1
   FP16=1
   DATALOADER_NUM_WORKERS=2
+  PREPROCESSING_NUM_WORKERS=8
+  OVERWRITE_CACHE=0
   SYN_STEPS=1000
   RUN_ABLATIONS=0
+  RUN_METHODS="m3_gate"
+  RESUME_FROM_CHECKPOINT="models/research_runs_gate_progressive/wikisql/m3_gate/seed_42/checkpoint-1000"
   DRY_RUN=1
 
 Scientific note:
   smoke/quick are only pipeline checks. Use course as the smallest meaningful
   comparison for a class project. Do not claim paper-level improvement from a
   single lightweight run.
+
+Method filter:
+  RUN_METHODS is optional. If set, only listed methods run.
+  Example: RUN_METHODS="m3_gate"
+  Example: RUN_METHODS="all"
+  Available: m0_original m1_original m3_original m3_gate
+             m3_gate_no_sparsity m3_gate_no_diversity m3_gate_fixed_temp
+
+Checkpoint resume:
+  RESUME_FROM_CHECKPOINT is optional and should point to a Hugging Face checkpoint.
+  Example: RESUME_FROM_CHECKPOINT="models/.../checkpoint-1000"
 EOF
 }
 
@@ -137,7 +152,8 @@ configure_stage_defaults() {
       RESULT_ROOT="${RESULT_ROOT:-results/research_runs_course}"
       SEEDS="${SEEDS:-42}"
       DATASETS="${DATASETS:-wikisql}"
-      RUN_CORE_BASELINES="${RUN_CORE_BASELINES:-1}"
+      RUN_METHODS="${RUN_METHODS:-m3_gate}"
+      RUN_CORE_BASELINES="${RUN_CORE_BASELINES:-0}"
       RUN_ABLATIONS="${RUN_ABLATIONS:-0}"
       NUM_BEAMS="${NUM_BEAMS:-1}"
       WIKISQL_STEPS="${WIKISQL_STEPS:-1000}"
@@ -149,6 +165,8 @@ configure_stage_defaults() {
       SYN_EVAL_STEPS="${SYN_EVAL_STEPS:-250}"
       SYN_SAVE_STEPS="${SYN_SAVE_STEPS:-500}"
       SYN_MAX_SOURCE_LENGTH="${SYN_MAX_SOURCE_LENGTH:-512}"
+      PREPROCESSING_NUM_WORKERS="${PREPROCESSING_NUM_WORKERS:-8}"
+      OVERWRITE_CACHE="${OVERWRITE_CACHE:-0}"
       LOGGING_STEPS="${LOGGING_STEPS:-25}"
       ;;
     core)
@@ -237,10 +255,17 @@ common_args() {
     --weight_decay "${WEIGHT_DECAY:-1e-2}" \
     --label_smoothing_factor "${LABEL_SMOOTHING_FACTOR:-0.1}" \
     --overwrite_output_dir "${OVERWRITE_OUTPUT_DIR:-1}" \
-    --overwrite_cache "${OVERWRITE_CACHE:-1}" \
+    --overwrite_cache "${OVERWRITE_CACHE:-0}" \
     --pad_to_max_length "${PAD_TO_MAX_LENGTH:-1}" \
     --fp16 "${FP16:-0}" \
+    --save_total_limit "${SAVE_TOTAL_LIMIT:-2}" \
     --dataloader_num_workers "${DATALOADER_NUM_WORKERS:-2}"
+}
+
+resume_args() {
+  if [ -n "${RESUME_FROM_CHECKPOINT:-}" ]; then
+    printf '%s\0' --resume_from_checkpoint "$RESUME_FROM_CHECKPOINT"
+  fi
 }
 
 run_wikisql() {
@@ -252,8 +277,10 @@ run_wikisql() {
   local out_dir="$EXP_ROOT/wikisql/$tag/seed_$seed"
   local log_dir="$LOG_ROOT/wikisql/$tag/seed_$seed"
   local common=()
+  local resume=()
 
   mapfile -d '' -t common < <(common_args)
+  mapfile -d '' -t resume < <(resume_args)
   mkdir -p "$out_dir" "$log_dir"
 
   log "WikiSQL | stage=$STAGE | method=$tag | encoding=$encoding | seed=$seed | steps=$WIKISQL_STEPS"
@@ -262,7 +289,9 @@ run_wikisql() {
     --encoding_type "$encoding" \
     "${extra[@]}" \
     "${common[@]}" \
+    "${resume[@]}" \
     --dataset_name "$BASE_DIR/data/wikisql" \
+    --preprocessing_num_workers "${PREPROCESSING_NUM_WORKERS:-8}" \
     --output_dir "$out_dir" \
     --do_train \
     --do_eval \
@@ -291,8 +320,10 @@ run_synthetic() {
   local out_dir="$EXP_ROOT/synthetic/$tag/seed_$seed"
   local log_dir="$LOG_ROOT/synthetic/$tag/seed_$seed"
   local common=()
+  local resume=()
 
   mapfile -d '' -t common < <(common_args)
+  mapfile -d '' -t resume < <(resume_args)
   mkdir -p "$out_dir" "$log_dir"
 
   log "Synthetic | stage=$STAGE | method=$tag | encoding=$encoding | seed=$seed | steps=$SYN_STEPS"
@@ -301,8 +332,10 @@ run_synthetic() {
     --encoding_type "$encoding" \
     "${extra[@]}" \
     "${common[@]}" \
+    "${resume[@]}" \
     --train_file "$BASE_DIR/data/train/train_synthetic.json" \
     --validation_file "$BASE_DIR/data/train/valid_synthetic.json" \
+    --preprocessing_num_workers "${PREPROCESSING_NUM_WORKERS:-8}" \
     --output_dir "$out_dir" \
     --do_train \
     --do_eval \
@@ -320,7 +353,6 @@ run_synthetic() {
     --logging_dir "$log_dir" \
     --logging_steps "$LOGGING_STEPS" \
     --save_strategy steps \
-    --save_total_limit "${SAVE_TOTAL_LIMIT:-1}" \
     --load_best_model_at_end "${LOAD_BEST_MODEL_AT_END:-1}" \
     --seed "$seed"
 }
@@ -331,6 +363,11 @@ run_method_for_dataset() {
   local encoding="$3"
   local seed="$4"
   shift 4
+
+  if ! should_run_method "$tag"; then
+    log "Skip method=$tag because RUN_METHODS='${RUN_METHODS:-all}'"
+    return
+  fi
 
   case "$dataset" in
     wikisql)
@@ -343,6 +380,26 @@ run_method_for_dataset() {
       die "Unknown dataset '$dataset'. Supported: wikisql synthetic"
       ;;
   esac
+}
+
+should_run_method() {
+  local method="$1"
+  local selected
+
+  if [ -z "${RUN_METHODS:-}" ]; then
+    return 0
+  fi
+
+  for selected in $RUN_METHODS; do
+    if [ "$selected" = "all" ]; then
+      return 0
+    fi
+    if [ "$selected" = "$method" ]; then
+      return 0
+    fi
+  done
+
+  return 1
 }
 
 run_matrix_for_dataset() {
@@ -689,11 +746,15 @@ datasets=$DATASETS
 seeds=$SEEDS
 run_core_baselines=$RUN_CORE_BASELINES
 run_ablations=$RUN_ABLATIONS
+run_methods=${RUN_METHODS:-all}
+resume_from_checkpoint=${RESUME_FROM_CHECKPOINT:-none}
 wikisql_steps=$WIKISQL_STEPS
 wikisql_max_source_length=${WIKISQL_MAX_SOURCE_LENGTH:-1024}
 num_beams=${NUM_BEAMS:-5}
 fp16=${FP16:-0}
 dataloader_num_workers=${DATALOADER_NUM_WORKERS:-2}
+preprocessing_num_workers=${PREPROCESSING_NUM_WORKERS:-8}
+overwrite_cache=${OVERWRITE_CACHE:-0}
 synthetic_steps=$SYN_STEPS
 synthetic_max_source_length=${SYN_MAX_SOURCE_LENGTH:-512}
 dry_run=${DRY_RUN:-0}
