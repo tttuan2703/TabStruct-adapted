@@ -1,0 +1,20 @@
+RESEARCH COMPARISON SUMMARY
+===========================
+
+Source root: models/research_runs_core
+Higher is better for denotation accuracy and throughput.
+Lower is better for loss and runtime.
+Do not claim improvement from smoke/quick runs alone.
+
+Dataset: synthetic
+
+
+Dataset: wikisql
+
+
+Interpretation checklist:
+- smoke/quick: pipeline check only, not scientific evidence.
+- core: first useful M3 vs M3-gate comparison.
+- ablation/full: stronger evidence if trends are consistent across seeds/datasets.
+- speedup claims require runtime/GPU-memory evidence.
+- gate/sparsity claims require extra gate metric logging beyond current source.

@@ -58,6 +58,8 @@ class TabStructEncoder(BartPreTrainedModel):
 
         self._use_sparse_mask = True if config.mask_number != 0 else False
         self.mask_number = config.mask_number
+        self.latest_gate_loss = None
+        self.latest_gate_stats = {}
 
         self.embed_positions = EmbeddingController(
             config
@@ -129,6 +131,8 @@ class TabStructEncoder(BartPreTrainedModel):
 
         encoder_states = () if output_hidden_states else None
         all_attentions = () if output_attentions else None
+        gate_losses = []
+        gate_stats = []
 
         # check if head_mask has a correct number of layers specified if desired
         if head_mask is not None:
@@ -171,9 +175,25 @@ class TabStructEncoder(BartPreTrainedModel):
                     )
 
                 hidden_states = layer_outputs[0]
+                gate_loss = getattr(encoder_layer.self_attn, "latest_gate_loss", None)
+                if gate_loss is not None:
+                    gate_losses.append(gate_loss)
+                    gate_stats.append(getattr(encoder_layer.self_attn, "latest_gate_stats", {}))
 
             if output_attentions:
                 all_attentions = all_attentions + (layer_outputs[1],)
+
+        if gate_losses:
+            self.latest_gate_loss = torch.stack(gate_losses).mean()
+            stat_names = ("sparsity", "entropy", "diversity")
+            self.latest_gate_stats = {
+                name: torch.stack([stats[name] for stats in gate_stats if name in stats]).mean()
+                for name in stat_names
+                if any(name in stats for stats in gate_stats)
+            }
+        else:
+            self.latest_gate_loss = None
+            self.latest_gate_stats = {}
 
         if output_hidden_states:
             encoder_states = encoder_states + (hidden_states,)

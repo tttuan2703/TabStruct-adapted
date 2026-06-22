@@ -2,6 +2,7 @@
 from tabstruct.attention.bias_utils import get_relative_relation_ids
 from torch import nn
 import torch
+import math
 
 from typing import Optional, Tuple
 
@@ -30,6 +31,10 @@ class StructAttention(nn.Module):
         self.head_dim = embed_dim // num_heads
         self.config = config
         self.encoding_structure_bias = config.encoding_structure_bias
+        self.learnable_sparse_gate = bool(getattr(config, "learnable_sparse_gate", False))
+        self.gate_epsilon = float(getattr(config, "gate_epsilon", 1e-6))
+        self.latest_gate_loss = None
+        self.latest_gate_stats = {}
 
         if (self.head_dim * num_heads) != self.embed_dim:
             raise ValueError(
@@ -49,9 +54,105 @@ class StructAttention(nn.Module):
         if self.encoding_structure_bias == "B1":
             self.attention_bias_embeddings = nn.Embedding(13 + 1, 1)
 
+        if self.learnable_sparse_gate:
+            gate_hidden_dim = int(getattr(config, "gate_hidden_dim", 64))
+            relation_dim = 9
+            self.gate_query_proj = nn.Linear(embed_dim, num_heads * gate_hidden_dim, bias=False)
+            self.gate_key_proj = nn.Linear(embed_dim, num_heads * gate_hidden_dim, bias=False)
+            self.gate_relation_proj = nn.Linear(relation_dim, num_heads, bias=True)
+
+            init_temperature = float(getattr(config, "gate_temperature", 1.0))
+            init_temperature = max(init_temperature, self.gate_epsilon)
+            if bool(getattr(config, "learnable_gate_temperature", False)):
+                self.log_gate_temperature = nn.Parameter(torch.full((num_heads,), math.log(init_temperature)))
+            else:
+                self.register_buffer("log_gate_temperature", torch.full((num_heads,), math.log(init_temperature)))
+
 
     def _shape(self, tensor: torch.Tensor, seq_len: int, bsz: int):
         return tensor.view(bsz, seq_len, self.num_heads, self.head_dim).transpose(1, 2).contiguous()
+
+    def _build_relation_features(self, token_type: torch.LongTensor) -> torch.Tensor:
+        segment_ids = token_type[:, :, 0]
+        column_ids = token_type[:, :, 1]
+        row_ids = token_type[:, :, 2]
+
+        same_column = column_ids.unsqueeze(1) == column_ids.unsqueeze(2)
+        same_row = row_ids.unsqueeze(1) == row_ids.unsqueeze(2)
+        same_cell = same_row & same_column
+        query_mask = segment_ids == 0
+        header_mask = (row_ids == 0) & (segment_ids == 1)
+        cell_mask = (row_ids != 0) & (segment_ids == 1)
+
+        pair_features = [
+            same_row,
+            same_column,
+            same_cell,
+            query_mask.unsqueeze(2).expand_as(same_row),
+            query_mask.unsqueeze(1).expand_as(same_row),
+            header_mask.unsqueeze(2).expand_as(same_row),
+            header_mask.unsqueeze(1).expand_as(same_row),
+            cell_mask.unsqueeze(2).expand_as(same_row),
+            cell_mask.unsqueeze(1).expand_as(same_row),
+        ]
+        return torch.stack(pair_features, dim=-1).to(dtype=torch.float32)
+
+    def _compute_sparse_gate(
+        self,
+        hidden_states: torch.Tensor,
+        token_type: torch.LongTensor,
+        attention_mask: torch.Tensor,
+    ) -> torch.Tensor:
+        bsz, seq_len, _ = hidden_states.size()
+        gate_hidden_dim = self.gate_query_proj.out_features // self.num_heads
+
+        query_gate = self.gate_query_proj(hidden_states).view(bsz, seq_len, self.num_heads, gate_hidden_dim)
+        key_gate = self.gate_key_proj(hidden_states).view(bsz, seq_len, self.num_heads, gate_hidden_dim)
+        query_gate = query_gate.permute(0, 2, 1, 3)
+        key_gate = key_gate.permute(0, 2, 1, 3)
+
+        relation_features = self._build_relation_features(token_type).to(device=hidden_states.device, dtype=hidden_states.dtype)
+        relation_logits = self.gate_relation_proj(relation_features).permute(0, 3, 1, 2)
+        content_logits = torch.matmul(query_gate, key_gate.transpose(-1, -2)) / math.sqrt(gate_hidden_dim)
+        gate_logits = content_logits + relation_logits
+
+        temperature = self.log_gate_temperature.exp().clamp_min(self.gate_epsilon).view(1, self.num_heads, 1, 1)
+        gate_probs = torch.sigmoid(gate_logits / temperature)
+
+        allowed_edges = torch.isfinite(attention_mask) & (attention_mask > torch.finfo(attention_mask.dtype).min / 2)
+        allowed_edges = allowed_edges.expand(-1, self.num_heads, -1, -1)
+        allowed_gate_probs = gate_probs.masked_select(allowed_edges)
+
+        if allowed_gate_probs.numel() == 0:
+            self.latest_gate_loss = gate_probs.new_zeros(())
+            self.latest_gate_stats = {}
+            return gate_probs
+
+        sparsity_loss = allowed_gate_probs.mean()
+        entropy = -(
+            allowed_gate_probs * torch.log(allowed_gate_probs + self.gate_epsilon)
+            + (1.0 - allowed_gate_probs) * torch.log(1.0 - allowed_gate_probs + self.gate_epsilon)
+        ).mean()
+
+        diversity_loss = gate_probs.new_zeros(())
+        if self.num_heads > 1:
+            head_masks = gate_probs.masked_fill(~allowed_edges, 0.0).flatten(start_dim=2)
+            normed = nn.functional.normalize(head_masks, p=2, dim=-1, eps=self.gate_epsilon)
+            cosine = torch.matmul(normed, normed.transpose(1, 2))
+            off_diagonal = ~torch.eye(self.num_heads, dtype=torch.bool, device=gate_probs.device)
+            diversity_loss = cosine[:, off_diagonal].mean()
+
+        self.latest_gate_loss = (
+            float(getattr(self.config, "sparsity_loss_weight", 0.0)) * sparsity_loss
+            + float(getattr(self.config, "diversity_loss_weight", 0.0)) * diversity_loss
+            + float(getattr(self.config, "entropy_loss_weight", 0.0)) * entropy
+        )
+        self.latest_gate_stats = {
+            "sparsity": sparsity_loss.detach(),
+            "entropy": entropy.detach(),
+            "diversity": diversity_loss.detach(),
+        }
+        return gate_probs
 
     def forward(
         self,
@@ -145,6 +246,12 @@ class StructAttention(nn.Module):
                 attention_bias = self.attention_bias_embeddings(attention_bias_ids).squeeze(-1).unsqueeze(1)
                 attention_bias = attention_bias.expand(-1, self.num_heads, -1, -1)
                 attn_weights = attn_weights + attention_bias
+
+            if self.learnable_sparse_gate and not is_cross_attention:
+                if token_type is None:
+                    raise ValueError("token_type is required when learnable_sparse_gate is enabled.")
+                gate_probs = self._compute_sparse_gate(hidden_states, token_type, attention_mask)
+                attn_weights = attn_weights + torch.log(gate_probs + self.gate_epsilon)
 
             attn_weights = attn_weights.view(bsz * self.num_heads, tgt_len, src_len)
 

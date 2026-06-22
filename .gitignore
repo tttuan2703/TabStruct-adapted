@@ -19,6 +19,8 @@ debug.ipynb
 .env
 *.env
 .venv/
+.miniforge/
+.python311/
 .ollama_env/
 ollama_env/
 
@@ -36,8 +38,11 @@ data/*
 jobs/*
 models/*
 
-# Ignore everything inside the utils/
-utils/
+# Ignore everything inside a root-level utils/ folder
+/utils/
+
+# Local Hugging Face cache
+.hf_cache/
 
 # But keep folders visible in repo
 !data/.gitkeep

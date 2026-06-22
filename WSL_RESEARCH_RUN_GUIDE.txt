@@ -1,0 +1,745 @@
+HUONG DAN CHAY THI NGHIEM WSL DE THU SO LIEU SO SANH VOI PAPER GOC
+=====================================================================
+
+Muc tieu cua file nay
+---------------------
+
+File nay tong hop cac lenh can chay trong WSL de:
+
+1. Cai moi truong, tai data, kiem tra source.
+2. Chay smoke test de dam bao pipeline khong loi.
+3. Chay cac baseline goc va bien the M3-gated de thu so lieu.
+4. Tong hop ket qua tu cac file JSON cua Hugging Face Trainer.
+5. Dien giai ket qua theo chuan nghien cuu khoa hoc, khong thoi phong va khong
+   tuyen bo cai tien khi chua co bang chung.
+
+Trang thai hien tai cua source
+------------------------------
+
+Source hien tai co prototype cho:
+
+- Fixed structural sparse prior M3.
+- Learnable sparse gate chi nam ben trong cac canh M3 cho phep.
+- Gate theo content/relation, head-specific.
+- Sparsity/diversity/entropy regularization.
+
+Nhung source hien tai chua tu dong log day du cac metric cua prompt1 nhu:
+
+- Sparsity ratio.
+- Active attention edges.
+- Head diversity curve.
+- Gate entropy curve.
+- GPU memory peak.
+- Full interpretability heatmap cho learned gate.
+- WikiTableQuestions pipeline.
+
+Vi vay, cac lenh trong file nay giup lay duoc so lieu hien co truoc:
+
+- Denotation accuracy.
+- Eval/predict loss neu trainer ghi ra.
+- Train/eval/predict runtime.
+- Throughput neu trainer ghi ra.
+- So sanh baseline M0/M1/M3 voi M3-gated va ablation.
+
+Neu muon claim day du theo prompt1, can bo sung logging rieng cho gate metrics va
+WTQ truoc khi viet ket luan manh.
+
+
+1. Chuan bi WSL
+---------------
+
+Mo Ubuntu/WSL terminal, vao root repo:
+
+cd "/mnt/d/AI_VDHD/Source code/TabStruct-adapted"
+
+Cai moi truong:
+
+bash script/setup_wsl.sh
+source .venv/bin/activate
+
+Thiet lap cache va encoding:
+
+export PYTHONUTF8=1
+export HF_HOME="$PWD/.hf_cache"
+mkdir -p "$HF_HOME"
+
+Kiem tra Python/Torch:
+
+python --version
+python -m pip check
+python -c "import torch; print(torch.__version__); print('cuda:', torch.cuda.is_available())"
+
+Kiem tra source compile duoc:
+
+python -m compileall -q tabstruct run.py
+
+
+2. Tai va kiem tra data
+-----------------------
+
+Neu chua co data:
+
+bash script/download_data.sh
+
+Neu da co data va chi muon kiem tra:
+
+bash script/download_data.sh --validate-only
+
+Ky vong co cac thu muc/file:
+
+data/train/
+data/wikisql/
+data/test/
+
+
+3. Sinh job goc neu can
+-----------------------
+
+Lenh sinh job theo all_models.txt:
+
+bash script/generate_all_jobs.sh
+
+Luu y:
+
+- Cac job sinh ra nam trong jobs/train/ va jobs/test/.
+- Cac job nay la baseline goc, chua co flag --learnable_sparse_gate.
+- Tren WSL local khong co Slurm, co the chay truc tiep bang bash file job.
+- Neu dung server co Slurm, co the dung:
+
+bash script/generate_all_jobs.sh true
+
+
+4. Thiet ke thuc nghiem toi thieu de so sanh cong bang
+------------------------------------------------------
+
+Khuyen nghi chay cung mot family encoding:
+
+- M0 original: T2_M0_TPE_B1_E1
+- M1 original: T2_M1_TPE_B1_E1
+- M3 original: T2_M3_TPE_B1_E1
+- Proposed:    T2_M3_TPE_B1_E1 + --learnable_sparse_gate
+
+Ablation nen chay them:
+
+- M3-gated no diversity: diversity_loss_weight = 0
+- M3-gated no sparsity:  sparsity_loss_weight = 0
+- M3-gated fixed temp:   khong dung --learnable_gate_temperature
+
+Dataset toi thieu voi source hien tai:
+
+- Synthetic.
+- WikiSQL.
+
+Dataset prompt1 yeu cau nhung source hien tai chua du:
+
+- WikiTableQuestions.
+
+De ket luan nghien cuu nghiem tuc:
+
+- Chay it nhat 3 seeds: 42, 43, 44.
+- Moi baseline va proposed dung cung data, cung max_steps, cung batch size.
+- Khong so sanh run smoke 10 steps voi run day du.
+- Khong claim speedup neu chua do runtime/memory.
+- Ket qua am van co gia tri khoa hoc: neu gate khong cai tien, hay bao cao dung.
+
+
+5. Smoke test nhanh
+-------------------
+
+Muc tieu: kiem tra pipeline chay duoc, khong dung de claim ket qua.
+
+Chay M3 baseline WikiSQL 10 steps:
+
+python run.py \
+  --task train \
+  --encoding_type T2_M3_TPE_B1_E1 \
+  --model_name_or_path facebook/bart-base \
+  --config_name microsoft/tapex-base \
+  --tokenizer_name facebook/bart-base \
+  --dataset_name "$PWD/data/wikisql" \
+  --output_dir "$PWD/models/research_runs_smoke/wikisql/m3_original/seed_42" \
+  --cache_dir "$PWD/.hf_cache" \
+  --do_train \
+  --do_eval \
+  --do_predict \
+  --per_device_train_batch_size 2 \
+  --gradient_accumulation_steps 12 \
+  --per_device_eval_batch_size 4 \
+  --learning_rate 3e-5 \
+  --eval_steps 5 \
+  --save_steps 10 \
+  --warmup_steps 0 \
+  --evaluation_strategy steps \
+  --predict_with_generate \
+  --num_beams 5 \
+  --weight_decay 1e-2 \
+  --label_smoothing_factor 0.1 \
+  --max_steps 10 \
+  --logging_dir "$PWD/logs/research_runs_smoke/wikisql/m3_original/seed_42" \
+  --logging_steps 1 \
+  --overwrite_output_dir 1 \
+  --overwrite_cache 1 \
+  --pad_to_max_length 1 \
+  --max_source_length 1024 \
+  --seed 42
+
+Chay M3-gated WikiSQL 10 steps:
+
+python run.py \
+  --task train \
+  --encoding_type T2_M3_TPE_B1_E1 \
+  --learnable_sparse_gate \
+  --learnable_gate_temperature \
+  --gate_hidden_dim 64 \
+  --gate_temperature 1.0 \
+  --sparsity_loss_weight 0.01 \
+  --diversity_loss_weight 0.01 \
+  --entropy_loss_weight 0.001 \
+  --model_name_or_path facebook/bart-base \
+  --config_name microsoft/tapex-base \
+  --tokenizer_name facebook/bart-base \
+  --dataset_name "$PWD/data/wikisql" \
+  --output_dir "$PWD/models/research_runs_smoke/wikisql/m3_gate/seed_42" \
+  --cache_dir "$PWD/.hf_cache" \
+  --do_train \
+  --do_eval \
+  --do_predict \
+  --per_device_train_batch_size 2 \
+  --gradient_accumulation_steps 12 \
+  --per_device_eval_batch_size 4 \
+  --learning_rate 3e-5 \
+  --eval_steps 5 \
+  --save_steps 10 \
+  --warmup_steps 0 \
+  --evaluation_strategy steps \
+  --predict_with_generate \
+  --num_beams 5 \
+  --weight_decay 1e-2 \
+  --label_smoothing_factor 0.1 \
+  --max_steps 10 \
+  --logging_dir "$PWD/logs/research_runs_smoke/wikisql/m3_gate/seed_42" \
+  --logging_steps 1 \
+  --overwrite_output_dir 1 \
+  --overwrite_cache 1 \
+  --pad_to_max_length 1 \
+  --max_source_length 1024 \
+  --seed 42
+
+Sau smoke test, kiem tra co result JSON:
+
+find models/research_runs_smoke -name "*_results.json" -print
+
+
+6. Auto-run script cho WSL local
+--------------------------------
+
+Khoi tao mot script auto-run tam thoi trong /tmp:
+
+cat > /tmp/tabstruct_research_autorun.sh <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+
+MODE="${1:-smoke}"
+DATASETS="${DATASETS:-wikisql synthetic}"
+RUN_ABLATIONS="${RUN_ABLATIONS:-}"
+
+export PYTHONUTF8=1
+export HF_HOME="${HF_HOME:-$PWD/.hf_cache}"
+mkdir -p "$HF_HOME"
+
+if [ "$MODE" = "smoke" ]; then
+  EXP_ROOT="${EXP_ROOT:-models/research_runs_smoke}"
+  LOG_ROOT="${LOG_ROOT:-logs/research_runs_smoke}"
+  RUN_ABLATIONS="${RUN_ABLATIONS:-0}"
+  SEEDS="${SEEDS:-42}"
+  WIKISQL_STEPS="${WIKISQL_STEPS:-10}"
+  WIKISQL_EVAL_STEPS="${WIKISQL_EVAL_STEPS:-5}"
+  WIKISQL_SAVE_STEPS="${WIKISQL_SAVE_STEPS:-10}"
+  WIKISQL_WARMUP_STEPS="${WIKISQL_WARMUP_STEPS:-0}"
+  SYN_STEPS="${SYN_STEPS:-10}"
+  SYN_EVAL_STEPS="${SYN_EVAL_STEPS:-5}"
+  SYN_SAVE_STEPS="${SYN_SAVE_STEPS:-10}"
+  LOGGING_STEPS="${LOGGING_STEPS:-1}"
+else
+  EXP_ROOT="${EXP_ROOT:-models/research_runs}"
+  LOG_ROOT="${LOG_ROOT:-logs/research_runs}"
+  RUN_ABLATIONS="${RUN_ABLATIONS:-1}"
+  SEEDS="${SEEDS:-42 43 44}"
+  WIKISQL_STEPS="${WIKISQL_STEPS:-20000}"
+  WIKISQL_EVAL_STEPS="${WIKISQL_EVAL_STEPS:-1000}"
+  WIKISQL_SAVE_STEPS="${WIKISQL_SAVE_STEPS:-4000}"
+  WIKISQL_WARMUP_STEPS="${WIKISQL_WARMUP_STEPS:-1000}"
+  SYN_STEPS="${SYN_STEPS:-500000}"
+  SYN_EVAL_STEPS="${SYN_EVAL_STEPS:-5000}"
+  SYN_SAVE_STEPS="${SYN_SAVE_STEPS:-5000}"
+  LOGGING_STEPS="${LOGGING_STEPS:-10}"
+fi
+
+mkdir -p "$EXP_ROOT" "$LOG_ROOT" results/research_runs
+
+COMMON_ARGS=(
+  --model_name_or_path facebook/bart-base
+  --config_name microsoft/tapex-base
+  --tokenizer_name facebook/bart-base
+  --cache_dir "$HF_HOME"
+  --predict_with_generate
+  --num_beams 5
+  --weight_decay 1e-2
+  --label_smoothing_factor 0.1
+  --overwrite_output_dir 1
+  --overwrite_cache 1
+  --pad_to_max_length 1
+)
+
+run_wikisql() {
+  local tag="$1"
+  local encoding="$2"
+  local seed="$3"
+  shift 3
+
+  local out_dir="$EXP_ROOT/wikisql/$tag/seed_$seed"
+  local log_dir="$LOG_ROOT/wikisql/$tag/seed_$seed"
+  mkdir -p "$out_dir" "$log_dir"
+
+  echo "===== WikiSQL | $tag | $encoding | seed=$seed ====="
+  python run.py \
+    --task train \
+    --encoding_type "$encoding" \
+    "$@" \
+    "${COMMON_ARGS[@]}" \
+    --dataset_name "$PWD/data/wikisql" \
+    --output_dir "$out_dir" \
+    --do_train \
+    --do_eval \
+    --do_predict \
+    --per_device_train_batch_size 2 \
+    --gradient_accumulation_steps 12 \
+    --per_device_eval_batch_size 4 \
+    --learning_rate 3e-5 \
+    --eval_steps "$WIKISQL_EVAL_STEPS" \
+    --save_steps "$WIKISQL_SAVE_STEPS" \
+    --warmup_steps "$WIKISQL_WARMUP_STEPS" \
+    --evaluation_strategy steps \
+    --max_steps "$WIKISQL_STEPS" \
+    --logging_dir "$log_dir" \
+    --logging_steps "$LOGGING_STEPS" \
+    --max_source_length 1024 \
+    --seed "$seed"
+}
+
+run_synthetic() {
+  local tag="$1"
+  local encoding="$2"
+  local seed="$3"
+  shift 3
+
+  local out_dir="$EXP_ROOT/synthetic/$tag/seed_$seed"
+  local log_dir="$LOG_ROOT/synthetic/$tag/seed_$seed"
+  mkdir -p "$out_dir" "$log_dir"
+
+  echo "===== Synthetic | $tag | $encoding | seed=$seed ====="
+  python run.py \
+    --task train \
+    --encoding_type "$encoding" \
+    "$@" \
+    "${COMMON_ARGS[@]}" \
+    --train_file "$PWD/data/train/train_synthetic.json" \
+    --validation_file "$PWD/data/train/valid_synthetic.json" \
+    --output_dir "$out_dir" \
+    --do_train \
+    --do_eval \
+    --per_device_train_batch_size 8 \
+    --gradient_accumulation_steps 1 \
+    --per_device_eval_batch_size 8 \
+    --learning_rate 3e-5 \
+    --eval_steps "$SYN_EVAL_STEPS" \
+    --save_steps "$SYN_SAVE_STEPS" \
+    --warmup_steps 0 \
+    --evaluation_strategy steps \
+    --max_steps "$SYN_STEPS" \
+    --max_target_length 128 \
+    --max_source_length 512 \
+    --logging_dir "$log_dir" \
+    --logging_steps "$LOGGING_STEPS" \
+    --save_strategy steps \
+    --save_total_limit 1 \
+    --load_best_model_at_end 1 \
+    --seed "$seed"
+}
+
+run_matrix_for_dataset() {
+  local dataset="$1"
+  local seed="$2"
+
+  if [ "$dataset" = "wikisql" ]; then
+    run_wikisql m0_original T2_M0_TPE_B1_E1 "$seed"
+    run_wikisql m1_original T2_M1_TPE_B1_E1 "$seed"
+    run_wikisql m3_original T2_M3_TPE_B1_E1 "$seed"
+    run_wikisql m3_gate T2_M3_TPE_B1_E1 "$seed" \
+      --learnable_sparse_gate \
+      --learnable_gate_temperature \
+      --gate_hidden_dim 64 \
+      --gate_temperature 1.0 \
+      --sparsity_loss_weight 0.01 \
+      --diversity_loss_weight 0.01 \
+      --entropy_loss_weight 0.001
+
+    if [ "$RUN_ABLATIONS" = "1" ]; then
+      run_wikisql m3_gate_no_diversity T2_M3_TPE_B1_E1 "$seed" \
+        --learnable_sparse_gate \
+        --learnable_gate_temperature \
+        --gate_hidden_dim 64 \
+        --gate_temperature 1.0 \
+        --sparsity_loss_weight 0.01 \
+        --diversity_loss_weight 0.0 \
+        --entropy_loss_weight 0.001
+
+      run_wikisql m3_gate_no_sparsity T2_M3_TPE_B1_E1 "$seed" \
+        --learnable_sparse_gate \
+        --learnable_gate_temperature \
+        --gate_hidden_dim 64 \
+        --gate_temperature 1.0 \
+        --sparsity_loss_weight 0.0 \
+        --diversity_loss_weight 0.01 \
+        --entropy_loss_weight 0.001
+
+      run_wikisql m3_gate_fixed_temp T2_M3_TPE_B1_E1 "$seed" \
+        --learnable_sparse_gate \
+        --gate_hidden_dim 64 \
+        --gate_temperature 1.0 \
+        --sparsity_loss_weight 0.01 \
+        --diversity_loss_weight 0.01 \
+        --entropy_loss_weight 0.001
+    fi
+  fi
+
+  if [ "$dataset" = "synthetic" ]; then
+    run_synthetic m0_original T2_M0_TPE_B1_E1 "$seed"
+    run_synthetic m1_original T2_M1_TPE_B1_E1 "$seed"
+    run_synthetic m3_original T2_M3_TPE_B1_E1 "$seed"
+    run_synthetic m3_gate T2_M3_TPE_B1_E1 "$seed" \
+      --learnable_sparse_gate \
+      --learnable_gate_temperature \
+      --gate_hidden_dim 64 \
+      --gate_temperature 1.0 \
+      --sparsity_loss_weight 0.01 \
+      --diversity_loss_weight 0.01 \
+      --entropy_loss_weight 0.001
+
+    if [ "$RUN_ABLATIONS" = "1" ]; then
+      run_synthetic m3_gate_no_diversity T2_M3_TPE_B1_E1 "$seed" \
+        --learnable_sparse_gate \
+        --learnable_gate_temperature \
+        --gate_hidden_dim 64 \
+        --gate_temperature 1.0 \
+        --sparsity_loss_weight 0.01 \
+        --diversity_loss_weight 0.0 \
+        --entropy_loss_weight 0.001
+
+      run_synthetic m3_gate_no_sparsity T2_M3_TPE_B1_E1 "$seed" \
+        --learnable_sparse_gate \
+        --learnable_gate_temperature \
+        --gate_hidden_dim 64 \
+        --gate_temperature 1.0 \
+        --sparsity_loss_weight 0.0 \
+        --diversity_loss_weight 0.01 \
+        --entropy_loss_weight 0.001
+
+      run_synthetic m3_gate_fixed_temp T2_M3_TPE_B1_E1 "$seed" \
+        --learnable_sparse_gate \
+        --gate_hidden_dim 64 \
+        --gate_temperature 1.0 \
+        --sparsity_loss_weight 0.01 \
+        --diversity_loss_weight 0.01 \
+        --entropy_loss_weight 0.001
+    fi
+  fi
+}
+
+for seed in $SEEDS; do
+  for dataset in $DATASETS; do
+    run_matrix_for_dataset "$dataset" "$seed"
+  done
+done
+
+echo "Done. Results under: $EXP_ROOT"
+SH
+
+chmod +x /tmp/tabstruct_research_autorun.sh
+
+Chay smoke auto-run:
+
+bash /tmp/tabstruct_research_autorun.sh smoke
+
+Chay main run day du tren WikiSQL va Synthetic, 3 seeds:
+
+SEEDS="42 43 44" DATASETS="wikisql synthetic" RUN_ABLATIONS=1 bash /tmp/tabstruct_research_autorun.sh main
+
+Neu GPU/thoigian han che, chay WikiSQL truoc:
+
+SEEDS="42 43 44" DATASETS="wikisql" RUN_ABLATIONS=1 bash /tmp/tabstruct_research_autorun.sh main
+
+Neu chi muon so sanh nhanh M3 vs M3-gated, tat ablation:
+
+SEEDS="42" DATASETS="wikisql" RUN_ABLATIONS=0 WIKISQL_STEPS=1000 bash /tmp/tabstruct_research_autorun.sh main
+
+Chay nen bang nohup:
+
+mkdir -p logs/research_runs
+nohup bash /tmp/tabstruct_research_autorun.sh main > logs/research_runs/autorun.out 2>&1 &
+tail -f logs/research_runs/autorun.out
+
+
+7. Theo doi GPU memory tuy chon
+-------------------------------
+
+Trong mot terminal WSL khac:
+
+mkdir -p logs/research_runs
+nvidia-smi --query-gpu=timestamp,name,memory.used,utilization.gpu --format=csv -l 5 > logs/research_runs/gpu_monitor.csv
+
+Dung bang Ctrl+C sau khi thuc nghiem xong.
+
+Luu y: chi claim GPU memory neu ban ghi duoc file gpu_monitor.csv hoac co so lieu
+memory peak dang tin cay.
+
+
+8. Tong hop ket qua thanh CSV
+-----------------------------
+
+Sau khi chay xong, dung lenh sau de gom cac file train/eval/predict results:
+
+python - <<'PY'
+from pathlib import Path
+import csv
+import json
+import math
+import statistics
+
+root = Path("models/research_runs")
+out_dir = Path("results/research_runs")
+out_dir.mkdir(parents=True, exist_ok=True)
+
+rows = []
+for run_dir in sorted(root.glob("*/*/seed_*")):
+    rel = run_dir.relative_to(root).parts
+    if len(rel) != 3:
+        continue
+    dataset, tag, seed_name = rel
+    row = {
+        "dataset": dataset,
+        "tag": tag,
+        "seed": seed_name.replace("seed_", ""),
+        "run_dir": str(run_dir),
+    }
+    for split in ["train", "eval", "predict"]:
+        p = run_dir / f"{split}_results.json"
+        if not p.exists():
+            continue
+        data = json.loads(p.read_text(encoding="utf-8"))
+        for key, value in data.items():
+            if isinstance(value, (int, float, str, bool)) or value is None:
+                row[f"{split}_{key}"] = value
+    rows.append(row)
+
+if not rows:
+    raise SystemExit("No result rows found under models/research_runs")
+
+preferred = [
+    "dataset",
+    "tag",
+    "seed",
+    "predict_denotation_accuracy",
+    "eval_denotation_accuracy",
+    "eval_loss",
+    "train_train_runtime",
+    "train_train_samples_per_second",
+    "train_train_steps_per_second",
+    "predict_predict_runtime",
+    "predict_predict_samples_per_second",
+    "run_dir",
+]
+all_keys = sorted({k for row in rows for k in row})
+fieldnames = [k for k in preferred if k in all_keys]
+fieldnames += [k for k in all_keys if k not in fieldnames]
+
+csv_path = out_dir / "research_summary.csv"
+with csv_path.open("w", newline="", encoding="utf-8") as f:
+    writer = csv.DictWriter(f, fieldnames=fieldnames)
+    writer.writeheader()
+    writer.writerows(rows)
+
+def to_float(value):
+    try:
+        if value is None or value == "":
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+def mean_std(values):
+    values = [v for v in values if v is not None and not math.isnan(v)]
+    if not values:
+        return None, None, 0
+    mean = statistics.mean(values)
+    std = statistics.stdev(values) if len(values) >= 2 else 0.0
+    return mean, std, len(values)
+
+metrics = [
+    "predict_denotation_accuracy",
+    "eval_denotation_accuracy",
+    "eval_loss",
+    "train_train_runtime",
+    "predict_predict_runtime",
+]
+
+groups = {}
+for row in rows:
+    groups.setdefault((row["dataset"], row["tag"]), []).append(row)
+
+lines = []
+lines.append("RESEARCH COMPARISON SUMMARY")
+lines.append("===========================")
+lines.append("")
+lines.append("Higher is better for denotation accuracy. Lower is better for loss/runtime.")
+lines.append("Do not claim improvement if only smoke runs were used.")
+lines.append("")
+
+for dataset in sorted({row["dataset"] for row in rows}):
+    lines.append(f"Dataset: {dataset}")
+    for metric in metrics:
+        lines.append(f"  Metric: {metric}")
+        for tag in sorted({tag for ds, tag in groups if ds == dataset}):
+            vals = [to_float(r.get(metric)) for r in groups[(dataset, tag)]]
+            mean, std, n = mean_std(vals)
+            if n == 0:
+                continue
+            lines.append(f"    {tag}: mean={mean:.6g}, std={std:.6g}, n={n}")
+
+        base_key = (dataset, "m3_original")
+        prop_key = (dataset, "m3_gate")
+        if base_key in groups and prop_key in groups:
+            base_vals = [to_float(r.get(metric)) for r in groups[base_key]]
+            prop_vals = [to_float(r.get(metric)) for r in groups[prop_key]]
+            base_mean, _, base_n = mean_std(base_vals)
+            prop_mean, _, prop_n = mean_std(prop_vals)
+            if base_n and prop_n:
+                delta = prop_mean - base_mean
+                lines.append(f"    delta(m3_gate - m3_original) = {delta:.6g}")
+        lines.append("")
+    lines.append("")
+
+txt_path = out_dir / "research_comparison.txt"
+txt_path.write_text("\n".join(lines), encoding="utf-8")
+
+print(f"Wrote {csv_path}")
+print(f"Wrote {txt_path}")
+PY
+
+Xem nhanh ket qua:
+
+cat results/research_runs/research_comparison.txt
+
+
+9. Doc ket qua dung chuan khoa hoc
+----------------------------------
+
+Mau ket luan hop le:
+
+- Neu M3-gated co accuracy cao hon M3 tren nhieu seeds:
+  "M3-gated cho thay xu huong cai thien denotation accuracy so voi fixed M3
+  trong thiet lap [dataset], voi delta trung binh [FILL]."
+
+- Neu M3-gated khong cao hon M3:
+  "Learnable gate khong tao cai thien accuracy ro rang trong thiet lap hien tai,
+  nhung day la ket qua am co y nghia; can phan tich gate collapse, loss weights,
+  va budget huan luyen."
+
+- Neu runtime/memory tang:
+  "Hien thuc hien tai la dense gate over token pairs nen co overhead. Khong nen
+  claim speedup cho toi khi co sparse implementation hoac so lieu runtime tot hon."
+
+- Neu chi chay smoke:
+  "Ket qua chi xac nhan pipeline chay duoc, khong phai bang chung cai tien."
+
+Khong nen viet:
+
+- "Mo hinh chung toi tot hon paper goc" neu moi co 1 seed.
+- "Sparse attention nhanh hon" neu chua do runtime/memory.
+- "Gate hoc duoc cau truc tot hon" neu chua co gate visualization/statistics.
+- "Dat state-of-the-art" neu chua so sanh voi cac baseline bat buoc.
+
+
+10. Bang ket qua toi thieu nen bao cao trong report
+---------------------------------------------------
+
+Bang accuracy:
+
+dataset | method | encoding | seed | denotation_accuracy | mean | std
+
+Bang runtime:
+
+dataset | method | train_runtime | predict_runtime | samples_per_second
+
+Bang ablation:
+
+dataset | method | sparsity_loss | diversity_loss | learnable_temp | accuracy
+
+Bang can bo sung sau neu sua logging:
+
+dataset | method | sparsity_ratio | active_edges | head_diversity | gate_entropy
+
+
+11. Tieu chi de xem la co dong gop khoa hoc
+-------------------------------------------
+
+Du dieu kien "prototype co tiem nang":
+
+- Code chay duoc.
+- M3-gated chi ap dung trong M3 mask.
+- Co baseline M3 va proposed.
+- Co ket qua smoke/main run.
+
+Du dieu kien "bang chung cai tien":
+
+- Co ket qua tren it nhat 2 dataset.
+- Co it nhat 3 seeds.
+- Proposed hon fixed M3 ve accuracy hoac co trade-off ro rang.
+- Ablation cho thay gate/diversity/sparsity/temp co vai tro.
+- Khong claim speedup neu runtime/memory khong ung ho.
+
+Du dieu kien "gan paper-ready theo prompt1":
+
+- Them WikiTableQuestions.
+- Them logging cho sparsity ratio, active edges, entropy, head diversity.
+- Them heatmap/visualization cho learned gate.
+- Them ablation Gumbel/Hard Concrete hoac ghi ro chua implement.
+- Co bang ket qua day du va discussion ve negative/positive findings.
+
+
+12. Cac file dau ra quan trong
+------------------------------
+
+Sau khi chay auto-run:
+
+models/research_runs/
+logs/research_runs/
+results/research_runs/research_summary.csv
+results/research_runs/research_comparison.txt
+
+Neu dung smoke:
+
+models/research_runs_smoke/
+
+
+13. Checklist truoc khi viet report
+-----------------------------------
+
+[ ] Da ghi ro dataset nao da chay.
+[ ] Da ghi ro model/baseline nao da chay.
+[ ] Da ghi seed, max_steps, batch size, GPU.
+[ ] Da so sanh voi M3 fixed baseline.
+[ ] Da bao cao ca runtime neu claim efficiency.
+[ ] Da bao cao ablation neu claim gate la dong gop.
+[ ] Da dung [FILL] cho ket qua chua chay.
+[ ] Khong viet ket qua khong co trong log/CSV.

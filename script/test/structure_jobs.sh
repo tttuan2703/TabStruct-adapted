@@ -1,17 +1,15 @@
-#!/bin/bash
+#!/usr/bin/env bash
+set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 BASE_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 echo "BASE_DIR: $BASE_DIR"
+SUBMIT="${1:-false}"
 
-mapfile -t all_models < $BASE_DIR/all_models.txt
-
-
-
-
+mapfile -t all_models < <(sed 's/\r$//' "$BASE_DIR/all_models.txt" | sed '/^[[:space:]]*$/d')
 
 generate_job() {
-  cat <<EOF > $BASE_DIR/jobs/test/$name/structure.sh
+  cat <<EOF > "$BASE_DIR/jobs/test/$name/structure.sh"
 #!/bin/bash
 #SBATCH --nodes=1
 #SBATCH --job-name=v$index
@@ -20,31 +18,30 @@ generate_job() {
 #SBATCH --partition=hard
 #SBATCH --output=$BASE_DIR/jobs/test/$name/results/structure.out
 
-python $BASE_DIR/run.py \\
+python "$BASE_DIR/run.py" \\
   --task test \\
   --encoding_type $name \\
   --do_eval \\
   --config_name microsoft/tapex-base \\
   --tokenizer_name facebook/bart-base \\
-  --dataset_name $BASE_DIR/data/test/structure  \\
-  --output_dir $BASE_DIR/models/$name/synthetic/resuts/structure \\
+  --dataset_name "$BASE_DIR/data/test/structure" \\
+  --output_dir "$BASE_DIR/models/$name/synthetic/results/structure" \\
   --per_device_eval_batch_size 8 \\
-  --logging_dir $BASE_DIR/logs/test/structure/$name \\
+  --logging_dir "$BASE_DIR/logs/test/structure/$name" \\
   --logging_steps 50 \\
   --predict_with_generate \\
-  --pad_to_max_length 1 
+  --pad_to_max_length 1
 
 EOF
 }
 
 index=0
 for name in "${all_models[@]}"; do
-  mkdir -p $BASE_DIR/jobs/test/$name/results
+  mkdir -p "$BASE_DIR/jobs/test/$name/results"
   echo "structure job for: $name count: $index"
-  generate_job $task $name $index
-  if [ "$1" == "true" ]; then
-    sbatch $BASE_DIR/jobs/test/$name/structure.sh
+  generate_job
+  if [ "$SUBMIT" == "true" ]; then
+    sbatch "$BASE_DIR/jobs/test/$name/structure.sh"
   fi
-  ((index++))
+  ((index += 1))
 done
-

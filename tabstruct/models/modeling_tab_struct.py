@@ -125,6 +125,9 @@ class TabStructForConditionalGeneration(BartPreTrainedModel):
             loss_fct = CrossEntropyLoss()
         
             masked_lm_loss = loss_fct(lm_logits.view(-1, self.config.vocab_size), labels.view(-1))
+            gate_loss = getattr(self.model.encoder, "latest_gate_loss", None)
+            if gate_loss is not None:
+                masked_lm_loss = masked_lm_loss + gate_loss
 
         if not return_dict:
             output = (lm_logits,) + outputs[1:]

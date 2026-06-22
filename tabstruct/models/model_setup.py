@@ -35,6 +35,14 @@ def load_config(data_args, model_args, logger ):
     config.positional_embedding = model_args.positional_embedding
     config.mask_number = int(model_args.mask_sparsity_level[-1])
     config.input_token_structure = model_args.input_token_structure
+    config.learnable_sparse_gate = model_args.learnable_sparse_gate
+    config.gate_hidden_dim = model_args.gate_hidden_dim
+    config.gate_temperature = model_args.gate_temperature
+    config.learnable_gate_temperature = model_args.learnable_gate_temperature
+    config.gate_epsilon = model_args.gate_epsilon
+    config.sparsity_loss_weight = model_args.sparsity_loss_weight
+    config.diversity_loss_weight = model_args.diversity_loss_weight
+    config.entropy_loss_weight = model_args.entropy_loss_weight
 
 
     config._attn_implementation = "sdpa" # To use StructAttention
@@ -42,6 +50,7 @@ def load_config(data_args, model_args, logger ):
 
     logger.info(f"config : {config}")
     logger.info(f"mask_number : {config.mask_number}")
+    logger.info(f"learnable_sparse_gate : {config.learnable_sparse_gate}")
     return config
 
 

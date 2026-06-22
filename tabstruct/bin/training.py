@@ -17,6 +17,45 @@ from tabstruct.metrics.base_metric import get_denotation_accuracy, postprocess_t
 
 
 class CustomSeq2SeqTrainer(Seq2SeqTrainer):
+    def _get_encoder_for_logging(self, model):
+        model = getattr(model, "module", model)
+        model_body = getattr(model, "model", None)
+        if model_body is None:
+            return None
+        return getattr(model_body, "encoder", None)
+
+    def _to_log_float(self, value):
+        if value is None:
+            return None
+        if torch.is_tensor(value):
+            value = value.detach().float().mean().cpu().item()
+        return float(value)
+
+    def _maybe_log_gate_metrics(self, model):
+        logging_steps = getattr(self.args, "logging_steps", 0)
+        step = int(getattr(self.state, "global_step", 0))
+        if logging_steps <= 0 or step <= 0 or step % logging_steps != 0:
+            return
+        if getattr(self, "_last_gate_log_step", None) == step:
+            return
+
+        encoder = self._get_encoder_for_logging(model)
+        if encoder is None:
+            return
+
+        logs = {}
+        gate_loss = self._to_log_float(getattr(encoder, "latest_gate_loss", None))
+        if gate_loss is not None:
+            logs["gate_loss"] = gate_loss
+
+        gate_stats = getattr(encoder, "latest_gate_stats", {})
+        for name in ("sparsity", "entropy", "diversity"):
+            if name in gate_stats:
+                logs[f"gate_{name}"] = self._to_log_float(gate_stats[name])
+
+        if logs:
+            self.log(logs)
+            self._last_gate_log_step = step
 
     def _save(self, output_dir: Optional[str] = None, _internal_call: bool = False):
         """
@@ -38,6 +77,7 @@ class CustomSeq2SeqTrainer(Seq2SeqTrainer):
     def compute_loss(self, model, inputs, return_outputs=False):
 
         loss, outputs = super().compute_loss(model, inputs, return_outputs=True)
+        self._maybe_log_gate_metrics(model)
         
         if return_outputs:
             return loss, outputs

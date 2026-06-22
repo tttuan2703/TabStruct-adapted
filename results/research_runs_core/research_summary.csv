@@ -1,0 +1,9 @@
+dataset,method,seed,run_dir
+synthetic,m0_original,42,models/research_runs_core/synthetic/m0_original/seed_42
+synthetic,m1_original,42,models/research_runs_core/synthetic/m1_original/seed_42
+synthetic,m3_gate,42,models/research_runs_core/synthetic/m3_gate/seed_42
+synthetic,m3_original,42,models/research_runs_core/synthetic/m3_original/seed_42
+wikisql,m0_original,42,models/research_runs_core/wikisql/m0_original/seed_42
+wikisql,m1_original,42,models/research_runs_core/wikisql/m1_original/seed_42
+wikisql,m3_gate,42,models/research_runs_core/wikisql/m3_gate/seed_42
+wikisql,m3_original,42,models/research_runs_core/wikisql/m3_original/seed_42
