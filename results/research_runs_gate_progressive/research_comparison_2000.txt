@@ -9,16 +9,16 @@ Do not claim improvement from smoke/quick runs alone.
 Dataset: wikisql
 
   Metric: train_train_runtime
-    m3_gate: mean=5340.34, std=0, n=1
+    m3_gate: mean=4855.35, std=0, n=1
 
   Metric: train_train_samples_per_second
-    m3_gate: mean=8.988, std=0, n=1
+    m3_gate: mean=4.943, std=0, n=1
 
   Metric: predict_predict_runtime
-    m3_gate: mean=1247.43, std=0, n=1
+    m3_gate: mean=1272.76, std=0, n=1
 
   Metric: predict_predict_samples_per_second
-    m3_gate: mean=12.729, std=0, n=1
+    m3_gate: mean=12.475, std=0, n=1
 
 
 Interpretation checklist:
