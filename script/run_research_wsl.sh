@@ -9,6 +9,8 @@ set -euo pipefail
 #   bash script/run_research_wsl.sh course
 #   bash script/run_research_wsl.sh core
 #   bash script/run_research_wsl.sh ablation
+#   bash script/run_research_wsl.sh evidence_m3
+#   bash script/run_research_wsl.sh evidence_ablation
 #   bash script/run_research_wsl.sh full
 #   bash script/run_research_wsl.sh summarize
 #
@@ -35,12 +37,20 @@ Stages, from small to large:
   smoke      Smallest train run: WikiSQL, seed 42, M3 vs M3-gate, 10 steps.
   quick      Short comparison: WikiSQL, seed 42, M3 vs M3-gate, 100 steps.
   course     Recommended class-project run: WikiSQL, seed 42, M3-gate only by default.
+  evidence_m3
+             Controlled paper comparison: WikiSQL, seed 42, M3-original, 20000 steps.
+  evidence_ablation
+             Short gate ablations: WikiSQL, seed 42, fixed-temp + no-sparsity, 10000 steps.
+  evidence_seed
+             Optional stability check: WikiSQL, seed 43, M3-gate, 10000 steps.
   core       Medium comparison: WikiSQL + Synthetic, seed 42, M0/M1/M3/M3-gate.
   ablation   Medium-large: core + gate ablations, seed 42.
   full       Large run: WikiSQL + Synthetic, seeds 42/43/44, full steps + ablations.
   summarize  Collect *_results.json into CSV/TXT summaries.
   course_summarize
              Collect course-stage results into CSV/TXT summaries.
+  evidence_summarize
+             Collect controlled comparison/ablation results into CSV/TXT summaries.
 
 Important environment overrides:
   SEEDS="42 43 44"
@@ -59,6 +69,9 @@ Important environment overrides:
   RUN_ABLATIONS=0
   RUN_METHODS="m3_gate"
   RESUME_FROM_CHECKPOINT="models/research_runs_gate_progressive/wikisql/m3_gate/seed_42/checkpoint-1000"
+  ALLOW_CROSS_METHOD_RESUME=0
+  GPU_MONITOR=1
+  GPU_MONITOR_INTERVAL=10
   DRY_RUN=1
 
 Scientific note:
@@ -95,6 +108,38 @@ run_cmd() {
   if [ "${DRY_RUN:-0}" != "1" ]; then
     "$@"
   fi
+}
+
+GPU_MONITOR_PID=""
+GPU_MONITOR_LOG=""
+
+stop_gpu_monitor() {
+  if [ -n "$GPU_MONITOR_PID" ]; then
+    kill "$GPU_MONITOR_PID" 2>/dev/null || true
+    wait "$GPU_MONITOR_PID" 2>/dev/null || true
+    GPU_MONITOR_PID=""
+  fi
+}
+
+start_gpu_monitor() {
+  if [ "${GPU_MONITOR:-0}" != "1" ] || [ "${DRY_RUN:-0}" = "1" ]; then
+    return
+  fi
+
+  if ! command -v nvidia-smi >/dev/null 2>&1; then
+    log "GPU_MONITOR=1 but nvidia-smi was not found; skipping GPU monitor."
+    return
+  fi
+
+  mkdir -p "$LOG_ROOT"
+  GPU_MONITOR_LOG="$LOG_ROOT/gpu_monitor_${STAGE}_$(date '+%Y%m%d_%H%M%S').csv"
+  log "GPU monitor: writing $GPU_MONITOR_LOG"
+  nvidia-smi \
+    --query-gpu=timestamp,index,name,memory.used,utilization.gpu,power.draw \
+    --format=csv \
+    -l "${GPU_MONITOR_INTERVAL:-10}" >"$GPU_MONITOR_LOG" &
+  GPU_MONITOR_PID=$!
+  trap stop_gpu_monitor EXIT INT TERM
 }
 
 activate_venv_if_present() {
@@ -169,6 +214,90 @@ configure_stage_defaults() {
       OVERWRITE_CACHE="${OVERWRITE_CACHE:-0}"
       LOGGING_STEPS="${LOGGING_STEPS:-25}"
       ;;
+    evidence_m3)
+      EXP_ROOT="${EXP_ROOT:-models/research_runs_gate_progressive}"
+      LOG_ROOT="${LOG_ROOT:-logs/research_runs_gate_progressive}"
+      RESULT_ROOT="${RESULT_ROOT:-results/research_runs_gate_progressive}"
+      SEEDS="${SEEDS:-42}"
+      DATASETS="${DATASETS:-wikisql}"
+      RUN_METHODS="${RUN_METHODS:-m3_original}"
+      RUN_CORE_BASELINES="${RUN_CORE_BASELINES:-0}"
+      RUN_ABLATIONS="${RUN_ABLATIONS:-0}"
+      NUM_BEAMS="${NUM_BEAMS:-1}"
+      FP16="${FP16:-1}"
+      WIKISQL_TRAIN_BATCH_SIZE="${WIKISQL_TRAIN_BATCH_SIZE:-4}"
+      WIKISQL_GRAD_ACCUM="${WIKISQL_GRAD_ACCUM:-6}"
+      DATALOADER_NUM_WORKERS="${DATALOADER_NUM_WORKERS:-4}"
+      SAVE_TOTAL_LIMIT="${SAVE_TOTAL_LIMIT:-3}"
+      WIKISQL_STEPS="${WIKISQL_STEPS:-20000}"
+      WIKISQL_EVAL_STEPS="${WIKISQL_EVAL_STEPS:-500}"
+      WIKISQL_SAVE_STEPS="${WIKISQL_SAVE_STEPS:-1000}"
+      WIKISQL_WARMUP_STEPS="${WIKISQL_WARMUP_STEPS:-50}"
+      WIKISQL_MAX_SOURCE_LENGTH="${WIKISQL_MAX_SOURCE_LENGTH:-1024}"
+      SYN_STEPS="${SYN_STEPS:-1000}"
+      SYN_EVAL_STEPS="${SYN_EVAL_STEPS:-250}"
+      SYN_SAVE_STEPS="${SYN_SAVE_STEPS:-500}"
+      SYN_MAX_SOURCE_LENGTH="${SYN_MAX_SOURCE_LENGTH:-512}"
+      PREPROCESSING_NUM_WORKERS="${PREPROCESSING_NUM_WORKERS:-8}"
+      OVERWRITE_CACHE="${OVERWRITE_CACHE:-0}"
+      LOGGING_STEPS="${LOGGING_STEPS:-25}"
+      ;;
+    evidence_ablation)
+      EXP_ROOT="${EXP_ROOT:-models/research_runs_gate_progressive}"
+      LOG_ROOT="${LOG_ROOT:-logs/research_runs_gate_progressive}"
+      RESULT_ROOT="${RESULT_ROOT:-results/research_runs_gate_progressive}"
+      SEEDS="${SEEDS:-42}"
+      DATASETS="${DATASETS:-wikisql}"
+      RUN_METHODS="${RUN_METHODS:-m3_gate_fixed_temp m3_gate_no_sparsity}"
+      RUN_CORE_BASELINES="${RUN_CORE_BASELINES:-0}"
+      RUN_ABLATIONS="${RUN_ABLATIONS:-1}"
+      NUM_BEAMS="${NUM_BEAMS:-1}"
+      FP16="${FP16:-1}"
+      WIKISQL_TRAIN_BATCH_SIZE="${WIKISQL_TRAIN_BATCH_SIZE:-4}"
+      WIKISQL_GRAD_ACCUM="${WIKISQL_GRAD_ACCUM:-6}"
+      DATALOADER_NUM_WORKERS="${DATALOADER_NUM_WORKERS:-4}"
+      SAVE_TOTAL_LIMIT="${SAVE_TOTAL_LIMIT:-3}"
+      WIKISQL_STEPS="${WIKISQL_STEPS:-10000}"
+      WIKISQL_EVAL_STEPS="${WIKISQL_EVAL_STEPS:-500}"
+      WIKISQL_SAVE_STEPS="${WIKISQL_SAVE_STEPS:-1000}"
+      WIKISQL_WARMUP_STEPS="${WIKISQL_WARMUP_STEPS:-50}"
+      WIKISQL_MAX_SOURCE_LENGTH="${WIKISQL_MAX_SOURCE_LENGTH:-1024}"
+      SYN_STEPS="${SYN_STEPS:-1000}"
+      SYN_EVAL_STEPS="${SYN_EVAL_STEPS:-250}"
+      SYN_SAVE_STEPS="${SYN_SAVE_STEPS:-500}"
+      SYN_MAX_SOURCE_LENGTH="${SYN_MAX_SOURCE_LENGTH:-512}"
+      PREPROCESSING_NUM_WORKERS="${PREPROCESSING_NUM_WORKERS:-8}"
+      OVERWRITE_CACHE="${OVERWRITE_CACHE:-0}"
+      LOGGING_STEPS="${LOGGING_STEPS:-25}"
+      ;;
+    evidence_seed)
+      EXP_ROOT="${EXP_ROOT:-models/research_runs_gate_progressive}"
+      LOG_ROOT="${LOG_ROOT:-logs/research_runs_gate_progressive}"
+      RESULT_ROOT="${RESULT_ROOT:-results/research_runs_gate_progressive}"
+      SEEDS="${SEEDS:-43}"
+      DATASETS="${DATASETS:-wikisql}"
+      RUN_METHODS="${RUN_METHODS:-m3_gate}"
+      RUN_CORE_BASELINES="${RUN_CORE_BASELINES:-0}"
+      RUN_ABLATIONS="${RUN_ABLATIONS:-0}"
+      NUM_BEAMS="${NUM_BEAMS:-1}"
+      FP16="${FP16:-1}"
+      WIKISQL_TRAIN_BATCH_SIZE="${WIKISQL_TRAIN_BATCH_SIZE:-4}"
+      WIKISQL_GRAD_ACCUM="${WIKISQL_GRAD_ACCUM:-6}"
+      DATALOADER_NUM_WORKERS="${DATALOADER_NUM_WORKERS:-4}"
+      SAVE_TOTAL_LIMIT="${SAVE_TOTAL_LIMIT:-3}"
+      WIKISQL_STEPS="${WIKISQL_STEPS:-10000}"
+      WIKISQL_EVAL_STEPS="${WIKISQL_EVAL_STEPS:-500}"
+      WIKISQL_SAVE_STEPS="${WIKISQL_SAVE_STEPS:-1000}"
+      WIKISQL_WARMUP_STEPS="${WIKISQL_WARMUP_STEPS:-50}"
+      WIKISQL_MAX_SOURCE_LENGTH="${WIKISQL_MAX_SOURCE_LENGTH:-1024}"
+      SYN_STEPS="${SYN_STEPS:-1000}"
+      SYN_EVAL_STEPS="${SYN_EVAL_STEPS:-250}"
+      SYN_SAVE_STEPS="${SYN_SAVE_STEPS:-500}"
+      SYN_MAX_SOURCE_LENGTH="${SYN_MAX_SOURCE_LENGTH:-512}"
+      PREPROCESSING_NUM_WORKERS="${PREPROCESSING_NUM_WORKERS:-8}"
+      OVERWRITE_CACHE="${OVERWRITE_CACHE:-0}"
+      LOGGING_STEPS="${LOGGING_STEPS:-25}"
+      ;;
     core)
       EXP_ROOT="${EXP_ROOT:-models/research_runs_core}"
       LOG_ROOT="${LOG_ROOT:-logs/research_runs_core}"
@@ -224,6 +353,11 @@ configure_stage_defaults() {
       EXP_ROOT="${EXP_ROOT:-models/research_runs_course}"
       LOG_ROOT="${LOG_ROOT:-logs/research_runs_course}"
       RESULT_ROOT="${RESULT_ROOT:-results/research_runs_course}"
+      ;;
+    evidence_summarize)
+      EXP_ROOT="${EXP_ROOT:-models/research_runs_gate_progressive}"
+      LOG_ROOT="${LOG_ROOT:-logs/research_runs_gate_progressive}"
+      RESULT_ROOT="${RESULT_ROOT:-results/research_runs_gate_progressive}"
       ;;
     summarize)
       EXP_ROOT="${EXP_ROOT:-models/research_runs_full}"
@@ -369,6 +503,8 @@ run_method_for_dataset() {
     return
   fi
 
+  validate_resume_matches_method "$dataset" "$tag" "$seed"
+
   case "$dataset" in
     wikisql)
       run_wikisql "$tag" "$encoding" "$seed" "$@"
@@ -378,6 +514,24 @@ run_method_for_dataset() {
       ;;
     *)
       die "Unknown dataset '$dataset'. Supported: wikisql synthetic"
+      ;;
+  esac
+}
+
+validate_resume_matches_method() {
+  local dataset="$1"
+  local tag="$2"
+  local seed="$3"
+
+  if [ -z "${RESUME_FROM_CHECKPOINT:-}" ] || [ "${ALLOW_CROSS_METHOD_RESUME:-0}" = "1" ]; then
+    return
+  fi
+
+  case "$RESUME_FROM_CHECKPOINT" in
+    *"/$dataset/$tag/seed_$seed/"*|*"/$tag/seed_$seed/"*)
+      ;;
+    *)
+      die "RESUME_FROM_CHECKPOINT='$RESUME_FROM_CHECKPOINT' does not match dataset=$dataset method=$tag seed=$seed. Unset RESUME_FROM_CHECKPOINT for a fresh controlled run."
       ;;
   esac
 }
@@ -535,6 +689,73 @@ for run_dir in sorted(root.glob("*/*/seed_*")):
                 row[f"{split}_{key}"] = value
     rows.append(row)
 
+def to_float(value):
+    try:
+        if value is None or value == "":
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+def mean_std(values):
+    clean = [v for v in values if v is not None and not math.isnan(v)]
+    if not clean:
+        return None, None, 0
+    mean = statistics.mean(clean)
+    std = statistics.stdev(clean) if len(clean) >= 2 else 0.0
+    return mean, std, len(clean)
+
+history_groups = {}
+for item in history_rows:
+    key = (item["dataset"], item["method"], item["seed"], item["run_dir"])
+    history_groups.setdefault(key, []).append(item)
+
+def summarize_history(items):
+    stats = {}
+    eval_items = []
+    for item in items:
+        acc = to_float(item.get("eval_denotation_accuracy"))
+        if acc is None:
+            continue
+        eval_items.append((acc, item))
+
+    if eval_items:
+        best_acc, best_item = max(eval_items, key=lambda pair: pair[0])
+        last_item = max(eval_items, key=lambda pair: to_float(pair[1].get("step")) or -1)[1]
+        stats["history_best_eval_denotation_accuracy"] = best_acc
+        stats["history_best_eval_step"] = to_float(best_item.get("step"))
+        stats["history_best_eval_epoch"] = to_float(best_item.get("epoch"))
+        stats["history_best_eval_loss_at_best"] = to_float(best_item.get("eval_loss"))
+        stats["history_last_eval_denotation_accuracy"] = to_float(last_item.get("eval_denotation_accuracy"))
+        stats["history_last_eval_step"] = to_float(last_item.get("step"))
+        stats["history_last_eval_loss"] = to_float(last_item.get("eval_loss"))
+
+    for metric in ["gate_loss", "gate_sparsity", "gate_entropy", "gate_diversity"]:
+        metric_items = []
+        for item in items:
+            value = to_float(item.get(metric))
+            if value is None:
+                continue
+            metric_items.append((to_float(item.get("step")) or -1, value))
+        if not metric_items:
+            continue
+        values = [value for _, value in metric_items]
+        mean, std, n = mean_std(values)
+        first_step, first_value = min(metric_items, key=lambda pair: pair[0])
+        last_step, last_value = max(metric_items, key=lambda pair: pair[0])
+        stats[f"history_mean_{metric}"] = mean
+        stats[f"history_std_{metric}"] = std
+        stats[f"history_n_{metric}"] = n
+        stats[f"history_first_{metric}"] = first_value
+        stats[f"history_first_{metric}_step"] = first_step
+        stats[f"history_last_{metric}"] = last_value
+        stats[f"history_last_{metric}_step"] = last_step
+    return stats
+
+for row in rows:
+    key = (row["dataset"], row["method"], row["seed"], row["run_dir"])
+    row.update(summarize_history(history_groups.get(key, [])))
+
 if not rows:
     raise SystemExit(f"No completed result JSON files found under {root}")
 
@@ -542,9 +763,24 @@ preferred = [
     "dataset",
     "method",
     "seed",
-    "predict_denotation_accuracy",
-    "eval_denotation_accuracy",
-    "eval_loss",
+    "predict_predict_denotation_accuracy",
+    "eval_eval_denotation_accuracy",
+    "history_best_eval_denotation_accuracy",
+    "history_best_eval_step",
+    "history_best_eval_loss_at_best",
+    "history_last_eval_denotation_accuracy",
+    "history_last_eval_step",
+    "history_last_eval_loss",
+    "predict_predict_loss",
+    "eval_eval_loss",
+    "history_mean_gate_sparsity",
+    "history_last_gate_sparsity",
+    "history_mean_gate_entropy",
+    "history_last_gate_entropy",
+    "history_mean_gate_diversity",
+    "history_last_gate_diversity",
+    "history_mean_gate_loss",
+    "history_last_gate_loss",
     "train_train_runtime",
     "train_train_samples_per_second",
     "train_train_steps_per_second",
@@ -589,26 +825,23 @@ if history_rows:
         writer.writeheader()
         writer.writerows(history_rows)
 
-def to_float(value):
-    try:
-        if value is None or value == "":
-            return None
-        return float(value)
-    except (TypeError, ValueError):
-        return None
-
-def mean_std(values):
-    clean = [v for v in values if v is not None and not math.isnan(v)]
-    if not clean:
-        return None, None, 0
-    mean = statistics.mean(clean)
-    std = statistics.stdev(clean) if len(clean) >= 2 else 0.0
-    return mean, std, len(clean)
-
 metrics = [
-    "predict_denotation_accuracy",
-    "eval_denotation_accuracy",
-    "eval_loss",
+    "predict_predict_denotation_accuracy",
+    "eval_eval_denotation_accuracy",
+    "history_best_eval_denotation_accuracy",
+    "history_last_eval_denotation_accuracy",
+    "predict_predict_loss",
+    "eval_eval_loss",
+    "history_best_eval_loss_at_best",
+    "history_last_eval_loss",
+    "history_mean_gate_sparsity",
+    "history_last_gate_sparsity",
+    "history_mean_gate_entropy",
+    "history_last_gate_entropy",
+    "history_mean_gate_diversity",
+    "history_last_gate_diversity",
+    "history_mean_gate_loss",
+    "history_last_gate_loss",
     "train_train_runtime",
     "train_train_samples_per_second",
     "predict_predict_runtime",
@@ -626,6 +859,7 @@ lines.append("")
 lines.append(f"Source root: {root}")
 lines.append("Higher is better for denotation accuracy and throughput.")
 lines.append("Lower is better for loss and runtime.")
+lines.append("Best-eval metrics are computed from trainer_state.json history, not from final result JSON.")
 lines.append("Do not claim improvement from smoke/quick runs alone.")
 lines.append("")
 
@@ -662,10 +896,13 @@ for dataset in sorted({row["dataset"] for row in rows}):
 lines.append("Interpretation checklist:")
 lines.append("- smoke/quick: pipeline check only, not scientific evidence.")
 lines.append("- course/core: first useful original-baseline vs M3-gate comparison.")
+lines.append("- evidence_m3: controlled same-setup M3-original comparison against the M3-gate run.")
+lines.append("- evidence_ablation: checks whether gate temperature/sparsity terms contribute to results.")
 lines.append("- ablation/full: stronger evidence if trends are consistent across seeds/datasets.")
-lines.append("- speedup claims require runtime/GPU-memory evidence.")
+lines.append("- speedup claims require runtime evidence and GPU_MONITOR=1 logs when discussing GPU memory/utilization.")
 lines.append("- gate_loss/gate_sparsity/gate_entropy/gate_diversity are logged for new M3-gate runs.")
-lines.append("- active-edge and GPU-memory claims still require extra instrumentation or external logs.")
+lines.append("- active-edge claims still require extra instrumentation beyond aggregate gate statistics.")
+lines.append("- If gate entropy stays near 0.693, report that the gate remains high-entropy rather than claiming hard edge selection.")
 
 if history_rows:
     plot_dir = out_dir / "plots"
@@ -750,23 +987,30 @@ run_methods=${RUN_METHODS:-all}
 resume_from_checkpoint=${RESUME_FROM_CHECKPOINT:-none}
 wikisql_steps=$WIKISQL_STEPS
 wikisql_max_source_length=${WIKISQL_MAX_SOURCE_LENGTH:-1024}
+wikisql_train_batch_size=${WIKISQL_TRAIN_BATCH_SIZE:-2}
+wikisql_grad_accum=${WIKISQL_GRAD_ACCUM:-12}
 num_beams=${NUM_BEAMS:-5}
 fp16=${FP16:-0}
+save_total_limit=${SAVE_TOTAL_LIMIT:-2}
 dataloader_num_workers=${DATALOADER_NUM_WORKERS:-2}
 preprocessing_num_workers=${PREPROCESSING_NUM_WORKERS:-8}
 overwrite_cache=${OVERWRITE_CACHE:-0}
 synthetic_steps=$SYN_STEPS
 synthetic_max_source_length=${SYN_MAX_SOURCE_LENGTH:-512}
+gpu_monitor=${GPU_MONITOR:-0}
 dry_run=${DRY_RUN:-0}
 EOF
 
   run_cmd bash script/download_data.sh --validate-only
+  start_gpu_monitor
 
   for seed in $SEEDS; do
     for dataset in $DATASETS; do
       run_matrix_for_dataset "$dataset" "$seed"
     done
   done
+
+  stop_gpu_monitor
 
   if [ "${DRY_RUN:-0}" = "1" ]; then
     log "DRY_RUN=1: commands were printed only. No training was executed, so no metrics were produced."
@@ -793,10 +1037,13 @@ case "$STAGE" in
   validate)
     validate_environment
     ;;
-  smoke|quick|course|core|ablation|full)
+  smoke|quick|course|evidence_m3|evidence_ablation|evidence_seed|core|ablation|full)
     run_experiments
     ;;
   course_summarize)
+    summarize_results
+    ;;
+  evidence_summarize)
     summarize_results
     ;;
   summarize)
