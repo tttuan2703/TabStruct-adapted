@@ -4,27 +4,79 @@ RESEARCH COMPARISON SUMMARY
 Source root: models/research_runs_gate_progressive
 Higher is better for denotation accuracy and throughput.
 Lower is better for loss and runtime.
+Best-eval metrics are computed from trainer_state.json history, not from final result JSON.
 Do not claim improvement from smoke/quick runs alone.
 
 Dataset: wikisql
 
+  Metric: predict_predict_denotation_accuracy
+    m3_gate: mean=0.773145, std=0, n=1
+
+  Metric: eval_eval_denotation_accuracy
+    m3_gate: mean=0.788149, std=0, n=1
+
+  Metric: history_best_eval_denotation_accuracy
+    m3_gate: mean=0.796105, std=0, n=1
+
+  Metric: history_last_eval_denotation_accuracy
+    m3_gate: mean=0.79088, std=0, n=1
+
+  Metric: predict_predict_loss
+    m3_gate: mean=1.83235, std=0, n=1
+
+  Metric: eval_eval_loss
+    m3_gate: mean=1.80046, std=0, n=1
+
+  Metric: history_best_eval_loss_at_best
+    m3_gate: mean=1.79779, std=0, n=1
+
+  Metric: history_last_eval_loss
+    m3_gate: mean=1.80046, std=0, n=1
+
+  Metric: history_mean_gate_sparsity
+    m3_gate: mean=0.497991, std=0, n=1
+
+  Metric: history_last_gate_sparsity
+    m3_gate: mean=0.495672, std=0, n=1
+
+  Metric: history_mean_gate_entropy
+    m3_gate: mean=0.692366, std=0, n=1
+
+  Metric: history_last_gate_entropy
+    m3_gate: mean=0.692259, std=0, n=1
+
+  Metric: history_mean_gate_diversity
+    m3_gate: mean=0.998412, std=0, n=1
+
+  Metric: history_last_gate_diversity
+    m3_gate: mean=0.998047, std=0, n=1
+
+  Metric: history_mean_gate_loss
+    m3_gate: mean=0.0156573, std=0, n=1
+
+  Metric: history_last_gate_loss
+    m3_gate: mean=0.0156333, std=0, n=1
+
   Metric: train_train_runtime
-    m3_gate: mean=74845.5, std=0, n=1
+    m3_gate: mean=65710.8, std=0, n=1
 
   Metric: train_train_samples_per_second
-    m3_gate: mean=6.413, std=0, n=1
+    m3_gate: mean=7.305, std=0, n=1
 
   Metric: predict_predict_runtime
-    m3_gate: mean=1324.27, std=0, n=1
+    m3_gate: mean=1243.01, std=0, n=1
 
   Metric: predict_predict_samples_per_second
-    m3_gate: mean=11.99, std=0, n=1
+    m3_gate: mean=12.774, std=0, n=1
 
 
 Interpretation checklist:
 - smoke/quick: pipeline check only, not scientific evidence.
 - course/core: first useful original-baseline vs M3-gate comparison.
+- evidence_m3: controlled same-setup M3-original comparison against the M3-gate run.
+- evidence_ablation: checks whether gate temperature/sparsity terms contribute to results.
 - ablation/full: stronger evidence if trends are consistent across seeds/datasets.
-- speedup claims require runtime/GPU-memory evidence.
+- speedup claims require runtime evidence and GPU_MONITOR=1 logs when discussing GPU memory/utilization.
 - gate_loss/gate_sparsity/gate_entropy/gate_diversity are logged for new M3-gate runs.
-- active-edge and GPU-memory claims still require extra instrumentation or external logs.
+- active-edge claims still require extra instrumentation beyond aggregate gate statistics.
+- If gate entropy stays near 0.693, report that the gate remains high-entropy rather than claiming hard edge selection.
